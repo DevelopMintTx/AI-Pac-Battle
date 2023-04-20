@@ -61,15 +61,15 @@ class ReflexCaptureAgent(CaptureAgent):
     Picks among the actions with the highest Q(s,a).
     """
     actions = gameState.getLegalActions(self.index)
+    actions.remove("Stop")  # stopping just seems useless
     # You can profile your evaluation time by uncommenting these lines
     start = time.time()
     values = [self.evaluate(gameState, a) for a in actions]
-    print('eval time for agent %d: %.4f' % (self.index, time.time() - start))
+    # print('eval time for agent %d: %.4f' % (self.index, time.time() - start))
 
     maxValue = max(values)
     bestActions = [a for a, v in zip(actions, values) if v == maxValue]
     foodLeft = len(self.getFood(gameState).asList())
-
     if foodLeft <= 2:
       bestDist = 9999
       for action in actions:
@@ -147,6 +147,20 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
     if self.RUNNING:
       if not self.on_enemy_side(gameState, myPos, self.getTeam(gameState)):
         self.RUNNING = False
+      else:
+        print("RUNNING!")
+        print(myPos)
+        min_distance = min([self.getMazeDistance(myPos, successor.getAgentState(enemy).getPosition()) for enemy in enemy_list])
+        if self.red:
+          features['successorScore'] = -abs((gameState.data.food.width / 2 - 5) - myPos[0])
+          features['distanceToFood'] = 0
+          features['distanceToEnemy'] = min_distance
+        else:
+          features['successorScore'] = -abs((gameState.data.food.width / 2 - 10) - myPos[0])
+          features['distanceToFood'] = 0
+          features['distanceToEnemy'] = min_distance
+        print(features)
+        return features
     features['successorScore'] = -len(food_list)  # self.getScore(successor)
 
     # Compute distance to the nearest food
@@ -175,7 +189,7 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
   def getWeights(self, gameState, action):
     # return {'successorScore': 100, 'distanceToFood': -1}
     if self.RUNNING:
-      return {'successorScore': 0, 'distanceToFood': 0, 'distanceToEnemy': 100}
+      return {'successorScore': 100, 'distanceToFood': 0, 'distanceToEnemy': 75}
     return {'successorScore': 100, 'distanceToFood': -1, 'distanceToEnemy': 1}
 
 class DefensiveReflexAgent(ReflexCaptureAgent):
