@@ -51,6 +51,7 @@ class ReflexCaptureAgent(CaptureAgent):
   """
   A base class for reflex agents that chooses score-maximizing actions
   """
+  debug_choices = {'Stop': 0, 'North': 0, 'West': 0, 'East': 0, 'South': 0}
 
   def registerInitialState(self, gameState):
     self.start = gameState.getAgentPosition(self.index)
@@ -65,10 +66,13 @@ class ReflexCaptureAgent(CaptureAgent):
     # You can profile your evaluation time by uncommenting these lines
     start = time.time()
     values = [self.evaluate(gameState, a) for a in actions]
-    # print('eval time for agent %d: %.4f' % (self.index, time.time() - start))
-
+    print('eval time for agent %d: %.4f' % (self.index, time.time() - start), f'enemySide: {self.on_enemy_side(gameState)}')
+    print(actions)
+    print(values)
+    print(self.debug_choices)
     maxValue = max(values)
     bestActions = [a for a, v in zip(actions, values) if v == maxValue]
+    print(bestActions)
     foodLeft = len(self.getFood(gameState).asList())
     if foodLeft <= 2:
       bestDist = 9999
@@ -120,6 +124,15 @@ class ReflexCaptureAgent(CaptureAgent):
     """
     return {'successorScore': 1.0}
 
+  def on_enemy_side(self, gameState):
+    if self.red:
+      if gameState.data.food.width / 2 < gameState.getAgentState(self.index).getPosition()[0]:
+        return True
+    else:
+      if gameState.data.food.width / 2 > gameState.getAgentState(self.index).getPosition()[0]:
+        return True
+    return False
+
 
 class OffensiveReflexAgent(ReflexCaptureAgent):
   """
@@ -131,36 +144,35 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
   CAUTIOUS = False
   SAFE = True
   carry_threshold = 6
-  def on_enemy_side(self, gameState, pos):
-    if self.red:
-      if gameState.data.food.width / 2 < pos[0]:
-        return True
-    else:
-      if gameState.data.food.width / 2 > pos[0]:
-        return True
-    return False
+  caution_distance = 6
+  safe_distance = 10
+  panic_distance = 4
 
-  def collect_cautiously_feat(self, features, caution_increase, min_distance):
+  def collect_cautiously_feat(self, features, caution_increase, enemy_distance, food_distance):
     print("Wary...")
-    features['distanceToEnemy'] = min_distance * caution_increase
+    features['distanceToFood'] = food_distance
+    features['distanceToEnemy'] = enemy_distance * caution_increase
     return features
 
-  def collect_freely_feat(self, features, food_list):
-    print("Safe")
+  def collect_freely_feat(self, features, food_list, minDistance):
+    features['distanceToFood'] = minDistance
     features['successorScore'] = -len(food_list)  # self.getScore(successor)
     features['distanceToEnemy'] = 0
     return features
 
-  def return_to_base_feat(self, feat, gameState, myPos, successor, min_distance):
+  def return_to_base_feat(self, feat, gameState, myPos, successor, min_distance, action):
     print("RUNNING!")
+    acts = successor.getLegalActions(self.index)
+    futureChoices = len(acts)  # this will help us favor paths which have more choices available to them
+    self.debug_choices[action] = futureChoices
     if self.red:
       feat['successorScore'] = -abs((gameState.data.food.width / 2 - 10) - myPos[0])
-      feat['distanceToFood'] = 0
       feat['distanceToEnemy'] = min_distance
+      feat['choicesAvailable'] = futureChoices
     else:
       feat['successorScore'] = -abs((gameState.data.food.width / 2 + 10) - myPos[0])
-      feat['distanceToFood'] = 0
       feat['distanceToEnemy'] = min_distance
+      feat['choicesAvailable'] = futureChoices
     return feat
 
   def getFeatures(self, gameState, action):
@@ -175,45 +187,44 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
 
     if len(food_list) > 0:  # This should always be True,  but better safe than sorry
       minDistance = min([self.getMazeDistance(myPos, food) for food in food_list])
-      features['distanceToFood'] = minDistance
-
+      numCarrying = gameState.data.agentStates[self.index].numCarrying
     # Compute distance to the nearest enemy
-    if gameState.data.agentStates[self.index].numCarrying > self.carry_threshold:
+    if numCarrying > self.carry_threshold:  # we check to see if we have enough food to return
+      print(numCarrying)
       self.RUNNING = True
       self.CAUTIOUS = False
       self.SAFE = False
-      return self.return_to_base_feat(features, gameState, myPos, successor, min_distance)
-    if self.on_enemy_side(gameState, myPos):
+      return self.return_to_base_feat(features, gameState, myPos, successor, min_distance, action)
+    if self.on_enemy_side(gameState):
       features['distanceToEnemy'] = min_distance
-      if min_distance > 10:
+      if min_distance > self.safe_distance:
         self.RUNNING = False
         self.CAUTIOUS = False
         self.SAFE = True
-      elif min_distance > 6:
+      elif min_distance > self.caution_distance:
         self.RUNNING = False
         self.CAUTIOUS = True
         self.SAFE = False
-      elif min_distance > 3:  # Book it
+      elif min_distance < self.panic_distance:  # Book it
         self.RUNNING = True
         self.CAUTIOUS = False
         self.SAFE = False
       if self.RUNNING:
-        return self.return_to_base_feat(features, gameState, myPos, successor, min_distance)
+        return self.return_to_base_feat(features, gameState, myPos, successor, min_distance, action)
       elif self.SAFE:
-        return self.collect_freely_feat(features, food_list)
+        return self.collect_freely_feat(features, food_list, minDistance)
       elif self.CAUTIOUS:
-        return self.collect_cautiously_feat(features, 2, min_distance)
-
+        return self.collect_cautiously_feat(features, 2, min_distance, minDistance)
     else:
       self.RUNNING = False
       self.CAUTIOUS = False
       self.SAFE = True
       features['distanceToEnemy'] = 0
-      return self.collect_freely_feat(features, food_list)
+      return self.collect_freely_feat(features, food_list, minDistance)
 
   def getWeights(self, gameState, action):
     if self.RUNNING:
-      return {'successorScore': 100, 'distanceToFood': 0, 'distanceToEnemy': 75}
+      return {'successorScore': 50, 'distanceToFood': -1, 'choicesAvailable': 60, 'distanceToEnemy': 60, 'crossSides': 1000}
     elif self.CAUTIOUS:
       return {'successorScore': 100, 'distanceToFood': -1, 'distanceToEnemy': 20}
     elif self.SAFE:
