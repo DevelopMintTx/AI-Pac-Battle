@@ -128,8 +128,10 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
   but it is by no means the best or only way to build an offensive agent.
   """
   RUNNING = False
-
-  def on_enemy_side(self, gameState, pos, team):
+  CAUTIOUS = False
+  SAFE = True
+  carry_threshold = 6
+  def on_enemy_side(self, gameState, pos):
     if self.red:
       if gameState.data.food.width / 2 < pos[0]:
         return True
@@ -138,59 +140,84 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         return True
     return False
 
+  def collect_cautiously_feat(self, features, caution_increase, min_distance):
+    print("Wary...")
+    features['distanceToEnemy'] = min_distance * caution_increase
+    return features
+
+  def collect_freely_feat(self, features, food_list):
+    print("Safe")
+    features['successorScore'] = -len(food_list)  # self.getScore(successor)
+    features['distanceToEnemy'] = 0
+    return features
+
+  def return_to_base_feat(self, feat, gameState, myPos, successor, min_distance):
+    print("RUNNING!")
+    if self.red:
+      feat['successorScore'] = -abs((gameState.data.food.width / 2 - 10) - myPos[0])
+      feat['distanceToFood'] = 0
+      feat['distanceToEnemy'] = min_distance
+    else:
+      feat['successorScore'] = -abs((gameState.data.food.width / 2 + 10) - myPos[0])
+      feat['distanceToFood'] = 0
+      feat['distanceToEnemy'] = min_distance
+    return feat
+
   def getFeatures(self, gameState, action):
+    # initial setup for feature functions
     features = util.Counter()
     successor = self.getSuccessor(gameState, action)
     food_list = self.getFood(successor).asList()
     enemy_list = self.getOpponents(successor)
     myPos = successor.getAgentState(self.index).getPosition()
-    if self.RUNNING:
-      if not self.on_enemy_side(gameState, myPos, self.getTeam(gameState)):
-        self.RUNNING = False
-      else:
-        print("RUNNING!")
-        print(myPos)
-        min_distance = min([self.getMazeDistance(myPos, successor.getAgentState(enemy).getPosition()) for enemy in enemy_list])
-        if self.red:
-          features['successorScore'] = -abs((gameState.data.food.width / 2 - 5) - myPos[0])
-          features['distanceToFood'] = 0
-          features['distanceToEnemy'] = min_distance
-        else:
-          features['successorScore'] = -abs((gameState.data.food.width / 2 - 10) - myPos[0])
-          features['distanceToFood'] = 0
-          features['distanceToEnemy'] = min_distance
-        print(features)
-        return features
-    features['successorScore'] = -len(food_list)  # self.getScore(successor)
-
-    # Compute distance to the nearest food
+    minDistance = None
+    min_distance = min([self.getMazeDistance(myPos, successor.getAgentState(enemy).getPosition()) for enemy in enemy_list])
 
     if len(food_list) > 0:  # This should always be True,  but better safe than sorry
       minDistance = min([self.getMazeDistance(myPos, food) for food in food_list])
       features['distanceToFood'] = minDistance
 
     # Compute distance to the nearest enemy
-    if self.on_enemy_side(gameState, myPos, self.getTeam(gameState)):
-      min_distance = min([self.getMazeDistance(myPos, successor.getAgentState(enemy).getPosition()) for enemy in enemy_list])
+    if gameState.data.agentStates[self.index].numCarrying > self.carry_threshold:
+      self.RUNNING = True
+      self.CAUTIOUS = False
+      self.SAFE = False
+      return self.return_to_base_feat(features, gameState, myPos, successor, min_distance)
+    if self.on_enemy_side(gameState, myPos):
       features['distanceToEnemy'] = min_distance
-      if min_distance>10:
-        features['distanceToEnemy'] = 0
-      elif min_distance > 5:
-        features['distanceToEnemy'] = min_distance * 2
+      if min_distance > 10:
+        self.RUNNING = False
+        self.CAUTIOUS = False
+        self.SAFE = True
+      elif min_distance > 6:
+        self.RUNNING = False
+        self.CAUTIOUS = True
+        self.SAFE = False
       elif min_distance > 3:  # Book it
         self.RUNNING = True
-        features['distanceToEnemy'] = min_distance * 10
-        features['distanceToFood'] = minDistance * 0
-        features['successorScore'] = 0
+        self.CAUTIOUS = False
+        self.SAFE = False
+      if self.RUNNING:
+        return self.return_to_base_feat(features, gameState, myPos, successor, min_distance)
+      elif self.SAFE:
+        return self.collect_freely_feat(features, food_list)
+      elif self.CAUTIOUS:
+        return self.collect_cautiously_feat(features, 2, min_distance)
+
     else:
+      self.RUNNING = False
+      self.CAUTIOUS = False
+      self.SAFE = True
       features['distanceToEnemy'] = 0
-    return features
+      return self.collect_freely_feat(features, food_list)
 
   def getWeights(self, gameState, action):
-    # return {'successorScore': 100, 'distanceToFood': -1}
     if self.RUNNING:
       return {'successorScore': 100, 'distanceToFood': 0, 'distanceToEnemy': 75}
-    return {'successorScore': 100, 'distanceToFood': -1, 'distanceToEnemy': 1}
+    elif self.CAUTIOUS:
+      return {'successorScore': 100, 'distanceToFood': -1, 'distanceToEnemy': 20}
+    elif self.SAFE:
+      return {'successorScore': 100, 'distanceToFood': -1, 'distanceToEnemy': 1}
 
 class DefensiveReflexAgent(ReflexCaptureAgent):
   """
