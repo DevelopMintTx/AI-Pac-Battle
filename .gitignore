@@ -129,3 +129,4 @@ dmypy.json
 .pyre/
 .idea/workspace.xml
 .idea/inspectionProfiles/Project_Default.xml
+.idea/vcs.xml
