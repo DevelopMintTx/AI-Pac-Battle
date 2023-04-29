@@ -242,21 +242,17 @@ class DefensiveReflexAgent(ReflexCaptureAgent):
     moving_to_edge = False
     at_edge_waiting = False
 
-    def go_to_mid_feat(self, features, gameState, myPos, successor, min_distance, action):
-        acts = successor.getLegalActions(self.index)
-        futureChoices = len(acts)
-        self.debug_choices[action] = futureChoices
+    def goToMiddleFeat(self, gameState, myPos, num_invaders, invader_distance, stop, reverse):
+        features = util.Counter()
+        distance_to_middle = self.getDistanceToMiddle(gameState, myPos)
 
-        distance_to_middle = -1
+        print(f"dist to mid: {distance_to_middle}")
 
-        if self.red:
-            distance_to_middle = -abs((gameState.data.food.width / 2 - 10) - myPos[0])
-        else:
-            distance_to_middle = -abs((gameState.data.food.width / 2 + 10) - myPos[0])
+        features["stop"] = stop
+        features["distance_to_middle"]
+        return features
 
-        return
-
-    def get_default_features(self, num_invaders, invader_distance, stop, reverse):
+    def getDefaultFeatures(self, num_invaders, invader_distance, stop, reverse):
         features = util.Counter()
         features["numInvaders"] = num_invaders
         features["invaderDistance"] = invader_distance
@@ -273,32 +269,27 @@ class DefensiveReflexAgent(ReflexCaptureAgent):
         ''' feature values '''
         invaders = self.getInvaders(successor)
         invader_distance = self.getClosestEnemy(myPos, invaders)
-        stop = -1
-        reverse = -1
+        self.chasing = True if len(invaders) else False
 
-        if action == Directions.STOP:
-            stop = 1
-
+        stop = 1 if action == Directions.STOP else -1
+        
         rev = Directions.REVERSE[gameState.getAgentState(self.index).configuration.direction]
-        if action == rev:
-            reverse = 1
+        reverse = 1 if action == rev else -1
 
-        # TODO: change to modify based on current state
-        features = self.get_default_features(len(invaders), invader_distance, stop, reverse)
-
-        print(features)
-
-        return features
-
+        # if (self.chasing):
+        #     print("chasing")
+        #     return self.getDefaultFeatures(len(invaders), invader_distance, stop, reverse)
+        # else: # not chasing, move to middle
+        #     print("not chasing")
+        #     return self.goToMiddleFeat(gameState, myPos, len(invaders), invader_distance, stop, reverse)
+        return self.getDefaultFeatures(len(invaders), invader_distance, stop, reverse)
+    
     def getWeights(self, gameState, action):
-        # get closest enemy
-        # add feature "chasing"
-            # chasing will indicate moving towards closest enemy
-            # enemy will be locked in, not just closest. unti enemy is killed or moved back to other side
-        # add feature "movingToEdge"
-            # moving to edge will make agent move towards center
-        # add feature "atEdgeWaiting"
-            # if not chasing, and already near edge, bounce up and down
+        # TODO: add case to run when enemy has pellet
+        # if (self.chasing):
+        #     return {'numInvaders': -1000, 'invaderDistance': -10, 'stop': -100, 'reverse': -2}
+        # else: 
+        #     return {'numInvaders': -1000, 'invaderDistance': -10, 'stop': -100, 'reverse': -2, "distanceToMiddle": -2}
         return {'numInvaders': -1000, 'invaderDistance': -10, 'stop': -100, 'reverse': -2}
 
     def getInvaders(self, successor): # return list of enemy agents on our side
@@ -310,7 +301,15 @@ class DefensiveReflexAgent(ReflexCaptureAgent):
         dists = []
         if len(invaders) > 0: # if enemy on our side
             dists = [self.getMazeDistance(myPos, a.getPosition()) for a in invaders]
-        return min(dists) if len(dists) else 0
+        return min(dists) if len(dists) else -1
+    
+    def getDistanceToMiddle(self, gameState, myPos):
+        distance_to_middle = 0
+        if self.red:
+            distance_to_middle = -abs((gameState.data.food.width / 2 - 10) - myPos[0])
+        else:
+            distance_to_middle = -abs((gameState.data.food.width / 2 + 10) - myPos[0])
+        return distance_to_middle
 
 def waitingGameHeuristic(enemies, dists, chasingEnemyX=None):
     direction = ""
