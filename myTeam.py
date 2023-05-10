@@ -52,15 +52,18 @@ class ReflexCaptureAgent(CaptureAgent):
   A base class for reflex agents that chooses score-maximizing actions
   """
   debug_choices = {'Stop': 0, 'North': 0, 'West': 0, 'East': 0, 'South': 0}
-
+  numEnemyCapsules = None
   def registerInitialState(self, gameState):
     self.start = gameState.getAgentPosition(self.index)
     CaptureAgent.registerInitialState(self, gameState)
+    self.numEnemyCapsules = len(self.getCapsules(gameState))
 
   def chooseAction(self, gameState):
     """
     Picks among the actions with the highest Q(s,a).
     """
+    numCarrying = gameState.data.agentStates[self.index].numCarrying
+    print(numCarrying)
     actions = gameState.getLegalActions(self.index)
     actions.remove("Stop")  # stopping just seems useless
     # You can profile your evaluation time by uncommenting these lines
@@ -69,7 +72,7 @@ class ReflexCaptureAgent(CaptureAgent):
     print('eval time for agent %d: %.4f' % (self.index, time.time() - start), f'enemySide: {self.on_enemy_side(gameState)}')
     print(actions)
     print(values)
-    print(self.debug_choices)
+    #  print(self.debug_choices)
     maxValue = max(values)
     bestActions = [a for a, v in zip(actions, values) if v == maxValue]
     print(bestActions)
@@ -141,17 +144,23 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
   but it is by no means the best or only way to build an offensive agent.
   """
   RUNNING = False
+  EVADING = False
   CAUTIOUS = False
   SAFE = True
+  SUPER_SAFE = False
+  capsuleTimer = 0
   carry_threshold = 6
-  caution_distance = 6
+  caution_distance = 7
   safe_distance = 10
-  panic_distance = 4
+  panic_distance = 6
 
-  def collect_cautiously_feat(self, features, caution_increase, enemy_distance, food_distance):
+  def collect_cautiously_feat(self, features, caution_increase, enemy_distance, food_distance, successor):
     print("Wary...")
     features['distanceToFood'] = food_distance
     features['distanceToEnemy'] = enemy_distance * caution_increase
+    acts = successor.getLegalActions(self.index)
+    futureChoices = len(acts)  # this will help us favor paths which have more choices available to them
+    features['choicesAvailable'] = futureChoices
     return features
 
   def collect_freely_feat(self, features, food_list, minDistance):
@@ -159,6 +168,16 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
     features['successorScore'] = -len(food_list)  # self.getScore(successor)
     features['distanceToEnemy'] = 0
     return features
+
+  def collect_capsule(self, feat, successor, capsule_distance, min_distance):
+    print("EVADING!")
+    acts = successor.getLegalActions(self.index)
+    futureChoices = len(acts)  # this will help us favor paths which have more choices available to them
+    # self.debug_choices[action] = futureChoices  # this is for debug
+    feat['successorScore'] = -capsule_distance
+    feat['choicesAvailable'] = futureChoices
+    feat['distanceToEnemy'] = min_distance
+    return feat
 
   def return_to_base_feat(self, feat, gameState, myPos, successor, min_distance, action):
     print("RUNNING!")
@@ -183,52 +202,94 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
     enemy_list = self.getOpponents(successor)
     myPos = successor.getAgentState(self.index).getPosition()
     minDistance = None
+    tempCapsuleNum = len(self.getCapsules(gameState))  # this will help us keep track of how many capsules we have, so we know when one is captured
     min_distance = min([self.getMazeDistance(myPos, successor.getAgentState(enemy).getPosition()) for enemy in enemy_list])
-
+    features['distanceToEnemy'] = min_distance
     if len(food_list) > 0:  # This should always be True,  but better safe than sorry
       minDistance = min([self.getMazeDistance(myPos, food) for food in food_list])
       numCarrying = gameState.data.agentStates[self.index].numCarrying
     # Compute distance to the nearest enemy
+    if self.SUPER_SAFE:
+      self.capsuleTimer -= 1
+      if self.capsuleTimer <= 0:
+        self.SUPER_SAFE = False
+        self.SAFE = True
+      if self.capsuleTimer < 7:
+        if tempCapsuleNum >= 1:
+          capsule_distance = min([self.getMazeDistance(myPos, capsule) for capsule in self.getCapsules(gameState)])
+          return self.collect_capsule(features, successor, capsule_distance, min_distance)
+        else:
+          return self.return_to_base_feat(features, gameState, myPos, successor, min_distance, action)
+      else:
+        features['distanceToEnemy'] = 0
+        return self.collect_freely_feat(features, food_list, minDistance)
+
     if numCarrying > self.carry_threshold:  # we check to see if we have enough food to return
       print(numCarrying)
       self.RUNNING = True
       self.CAUTIOUS = False
       self.SAFE = False
+      self.EVADING = False
       return self.return_to_base_feat(features, gameState, myPos, successor, min_distance, action)
     if self.on_enemy_side(gameState):
-      features['distanceToEnemy'] = min_distance
+      # features['distanceToEnemy'] = min_distance
       if min_distance > self.safe_distance:
         self.RUNNING = False
         self.CAUTIOUS = False
         self.SAFE = True
-      elif min_distance > self.caution_distance:
-        self.RUNNING = False
-        self.CAUTIOUS = True
-        self.SAFE = False
+        self.EVADING = False
       elif min_distance < self.panic_distance:  # Book it
-        self.RUNNING = True
+        self.EVADING = True
+        self.RUNNING = False
         self.CAUTIOUS = False
         self.SAFE = False
       if self.RUNNING:
         return self.return_to_base_feat(features, gameState, myPos, successor, min_distance, action)
       elif self.SAFE:
         return self.collect_freely_feat(features, food_list, minDistance)
-      elif self.CAUTIOUS:
-        return self.collect_cautiously_feat(features, 2, min_distance, minDistance)
+      elif self.EVADING:
+        if self.numEnemyCapsules > tempCapsuleNum:
+          self.numEnemyCapsules = tempCapsuleNum
+          self.capsuleTimer = 40
+          self.RUNNING = False
+          self.EVADING = False
+          self.CAUTIOUS = False
+          self.SAFE = False
+          self.SUPER_SAFE = True
+          return self.collect_freely_feat(features, food_list, minDistance)
+        elif tempCapsuleNum == 0:
+          self.RUNNING = True
+          self.EVADING = False
+          self.CAUTIOUS = False
+          self.SAFE = False
+          self.SUPER_SAFE = False
+          return self.return_to_base_feat(features, gameState, myPos, successor, min_distance, action)
+        else:
+          capsule_distance = min([self.getMazeDistance(myPos, capsule) for capsule in self.getCapsules(gameState)])
+          return self.collect_capsule(features, successor, capsule_distance, min_distance)
     else:
       self.RUNNING = False
+      self.EVADING = False
       self.CAUTIOUS = False
       self.SAFE = True
       features['distanceToEnemy'] = 0
       return self.collect_freely_feat(features, food_list, minDistance)
 
   def getWeights(self, gameState, action):
-    if self.RUNNING:
-      return {'successorScore': 50, 'distanceToFood': -1, 'choicesAvailable': 60, 'distanceToEnemy': 60, 'crossSides': 1000}
+    if self.EVADING:
+      return {'successorScore': 50, 'choicesAvailable': 70, 'distanceToEnemy': 70}
+    elif self.RUNNING:
+      return {'successorScore': 50, 'distanceToFood': -1, 'choicesAvailable': 60, 'distanceToEnemy': 60}
     elif self.CAUTIOUS:
-      return {'successorScore': 100, 'distanceToFood': -1, 'distanceToEnemy': 20}
+      return {'successorScore': 80, 'distanceToFood': -1, 'choicesAvailable': 60, 'distanceToEnemy': 20}
     elif self.SAFE:
-      return {'successorScore': 100, 'distanceToFood': -1, 'distanceToEnemy': 1}
+      return {'successorScore': 100, 'distanceToFood': -2, 'distanceToEnemy': 1}
+    elif self.SUPER_SAFE:
+      return {'successorScore': 100, 'distanceToFood': -2, 'choicesAvailable': 60, 'distanceToEnemy': 20}
+    else:
+      print("BUGBUGBUGBUGBUG")
+      return {'successorScore': 50, 'distanceToFood': -1, 'choicesAvailable': 60, 'distanceToEnemy': 60}
+
 
 class DefensiveReflexAgent(ReflexCaptureAgent):
   """
