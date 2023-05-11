@@ -70,11 +70,11 @@ class ReflexCaptureAgent(CaptureAgent):
         # You can profile your evaluation time by uncommenting these lines
         start = time.time()
         values = [self.evaluate(gameState, a) for a in actions]
-        print('eval time for agent %d: %.4f' % (self.index, time.time() -
-                                                start), f'enemySide: {self.on_enemy_side(gameState)}')
+        # print('eval time for agent %d: %.4f' % (self.index, time.time() - start), f'enemySide: {self.on_enemy_side(gameState)}')
 
         maxValue = max(values)
         bestActions = [a for a, v in zip(actions, values) if v == maxValue]
+        print(f"Best actions: {bestActions}\nValues:{values}\n\n")
         foodLeft = len(self.getFood(gameState).asList())
         if foodLeft <= 2:
             bestDist = 9999
@@ -87,7 +87,7 @@ class ReflexCaptureAgent(CaptureAgent):
                     bestDist = dist
             return bestAction
 
-        return random.choice(bestActions)
+        return bestActions[0] # changed from choosing random choice to choosing best choice
 
     def getSuccessor(self, gameState, action):
         """
@@ -237,26 +237,36 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
 
 class DefensiveReflexAgent(ReflexCaptureAgent):
     distance_to_middle = -1
-    chasing = False
-    enemy_chasing = -1
+    CHASING = False
+    SCARED = False
     moving_to_edge = False
     at_edge_waiting = False
 
-    def goToMiddleFeat(self, gameState, myPos, num_invaders, invader_distance, stop, reverse):
+    def scaredFeat(self, gameState, myPos, action, invaderDistance, scaredTimer):
+        features = util.Counter()
+
+        # if invader distance greater than scared threshold and timer less than threshold
+            # stop value should be max
+            # features["stop"] = action
+
+        features["invaderDistance"] = invaderDistance # want to max this value if enemy close and timer large
+
+
+        return features
+
+    def goToMiddleFeat(self, gameState, myPos):
         features = util.Counter()
         distance_to_middle = self.getDistanceToMiddle(gameState, myPos)
 
         print(f"dist to mid: {distance_to_middle}")
 
-        features["stop"] = stop
-        features["distance_to_middle"]
+        features["distanceToMiddle"] = distance_to_middle
         return features
 
-    def getDefaultFeatures(self, num_invaders, invader_distance, stop, reverse):
+    def getDefaultFeatures(self, num_invaders, invaderDistance, reverse):
         features = util.Counter()
         features["numInvaders"] = num_invaders
-        features["invaderDistance"] = invader_distance
-        features["stop"] = stop
+        features["invaderDistance"] = invaderDistance
         features["reverse"] = reverse
         return features
 
@@ -268,29 +278,28 @@ class DefensiveReflexAgent(ReflexCaptureAgent):
 
         ''' feature values '''
         invaders = self.getInvaders(successor)
-        invader_distance = self.getClosestEnemy(myPos, invaders)
-        self.chasing = True if len(invaders) else False
-
-        stop = 1 if action == Directions.STOP else -1
-        
+        invaderDistance = self.getClosestEnemy(myPos, invaders)
+        self.SCARED = myState.scaredTimer > 0
+        self.CHASING = True if (len(invaders) and not self.SCARED) else False
         rev = Directions.REVERSE[gameState.getAgentState(self.index).configuration.direction]
         reverse = 1 if action == rev else -1
 
-        # if (self.chasing):
-        #     print("chasing")
-        #     return self.getDefaultFeatures(len(invaders), invader_distance, stop, reverse)
-        # else: # not chasing, move to middle
-        #     print("not chasing")
-        #     return self.goToMiddleFeat(gameState, myPos, len(invaders), invader_distance, stop, reverse)
-        return self.getDefaultFeatures(len(invaders), invader_distance, stop, reverse)
+
+        if (self.CHASING):
+            return self.getDefaultFeatures(len(invaders), invaderDistance, reverse)
+        elif (self.SCARED):
+            print("Scared, should be running")
+            return self.scaredFeat(gameState, myPos, action, invaderDistance, myState.scaredTimer)
+        else:
+            return self.goToMiddleFeat(gameState, myPos)
     
     def getWeights(self, gameState, action):
-        # TODO: add case to run when enemy has pellet
-        # if (self.chasing):
-        #     return {'numInvaders': -1000, 'invaderDistance': -10, 'stop': -100, 'reverse': -2}
-        # else: 
-        #     return {'numInvaders': -1000, 'invaderDistance': -10, 'stop': -100, 'reverse': -2, "distanceToMiddle": -2}
-        return {'numInvaders': -1000, 'invaderDistance': -10, 'stop': -100, 'reverse': -2}
+        if (self.CHASING):
+            return {'numInvaders': -1000, 'invaderDistance': -10, 'reverse': -2}
+        elif (self.SCARED):
+            return {'invaderDistance': -10, "stop": -2}
+        else: 
+            return {"distanceToMiddle": -10}
 
     def getInvaders(self, successor): # return list of enemy agents on our side
         enemies = [successor.getAgentState(i) for i in self.getOpponents(successor)]
@@ -304,21 +313,17 @@ class DefensiveReflexAgent(ReflexCaptureAgent):
         return min(dists) if len(dists) else -1
     
     def getDistanceToMiddle(self, gameState, myPos):
-        distance_to_middle = 0
+        middle_x = 0
         if self.red:
-            distance_to_middle = -abs((gameState.data.food.width / 2 - 10) - myPos[0])
+            middle_x = gameState.data.food.width / 2 - 10
         else:
-            distance_to_middle = -abs((gameState.data.food.width / 2 + 10) - myPos[0])
-        return distance_to_middle
+            middle_x = gameState.data.food.width / 2 + 10
 
-def waitingGameHeuristic(enemies, dists, chasingEnemyX=None):
-    direction = ""
-    # if chasing enemy x and enemy x on our side (in 2 moves?)
-    # return direction of enemy
-    # if enemy not on our side
-    # if within 2 paces of middle
-    # if can see enemy on other side, move in y direction
-    # else, stop
-    # else move towards middle
+        return self.getMazeDistance(myPos, (middle_x, (gameState.data.food.height / 2 + 1))) # make sure y is legal
+    
+        # for y in range(int(myPos[1]), int(gameState.data.food.height)):
+        #     try:
+        #         return self.getMazeDistance(myPos, (middle_x, y))
+        #     except:
+        #         print("invalid distance")
 
-    return  # direction
